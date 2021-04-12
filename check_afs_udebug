@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-our $VERSION = '2.4 (2013-01-12)';
+our $VERSION = '2.5 (2021-04-12)';
 #
 # check_afs_udebug -- Check AFS database servers using udebug for Nagios.
 #
@@ -9,8 +9,11 @@ our $VERSION = '2.4 (2013-01-12)';
 # any of the servers don't believe there is a sync site.
 #
 # Written by Russ Allbery <rra@stanford.edu>
+# Updated by Bill MacAllister
 # Copyright 2004, 2010, 2013
 #     The Board of Trustees of the Leland Stanford Junior University
+# Copyright 2021
+#     Bill MacAllister <bill@ca-zephyr.org>
 #
 # This program is free software; you may redistribute it and/or modify it
 # under the same terms as Perl itself.
@@ -24,6 +27,12 @@ require 5.006;
 use strict;
 
 use Getopt::Long qw(GetOptions);
+
+# Server type: afs or auristor
+my $SERVER_TYPE;
+
+# Command line switch used globally in the script
+my $opt_debug;
 
 ##############################################################################
 # Site configuration
@@ -50,10 +59,38 @@ sub syntax {
     exit 3;
 }
 
+
+# Determine the type of server we are talking into, afs or auristor.
+sub set_server_type {
+    my ($type) = @_;
+    if (defined $type and length($type)) {
+        $SERVER_TYPE = $type;
+    } else {
+        if (-e '/etc/yfs') {
+            $SERVER_TYPE = 'auristor';
+        } else {
+            $SERVER_TYPE = 'afs';
+        }
+    }
+    if ($SERVER_TYPE =~ /^af/xms) {
+        $SERVER_TYPE = 'afs';
+    } elsif ($SERVER_TYPE =~ /^au/xms) {
+        $SERVER_TYPE = 'auristor';
+    } else {
+        syntax("Unknown server type ($SERVER_TYPE)");
+    }
+    return $SERVER_TYPE;
+}
+
+##############################################################################
+# Main Routine
+##############################################################################
+
 # Parse command line options.
-my ($help, $host, $port, $version);
+my ($help, $host, $opt_server, $port, $version);
 Getopt::Long::config ('bundling', 'no_ignore_case');
-GetOptions ('H|hostname=s' => \$host,
+GetOptions ('D|debug'      => \$opt_debug,
+            'H|hostname=s' => \$host,
             'h|help'       => \$help,
             'p|port=i'     => \$port,
             't|timeout=i'  => \$TIMEOUT,
@@ -67,9 +104,15 @@ if ($help) {
     print "check_afs_udebug $version\n";
     exit 0;
 }
-syntax ("extra arguments on command line") if @ARGV;
-syntax ("host to check not specified") unless (defined $host);
-syntax ("port to check not specified") unless (defined $port);
+if (@ARGV) {
+    syntax ("extra arguments on command line");
+}
+if (! defined $host) {
+    syntax ("host to check not specified");
+}
+if (! defined $port) {
+    syntax ("port to check not specified");
+}
 
 # Set up the alarm.
 $SIG{ALRM} = sub {
@@ -78,22 +121,43 @@ $SIG{ALRM} = sub {
 };
 alarm ($TIMEOUT);
 
+# Set the server type
+set_server_type($opt_server);
+
 # Run udebug and parse the output.  We're looking for three things: first,
 # we're looking to see if this host claims to be the sync site.  If so, check
 # that recovery state is 1f.  Otherwise, make sure that there's a defined sync
 # host.
-unless (open (UDEBUG, "$UDEBUG $host $port |")) {
+if ($opt_debug) {
+    print("Executing: $UDEBUG $host $port\n");
+}
+if (! (open (UDEBUG, "$UDEBUG $host $port |"))) {
     warn "$0: cannot run udebug\n";
     exit 3;
 }
 my ($issync, $recovery, $synchost, $db);
 while (<UDEBUG>) {
-    $issync = 1 if /^I am sync site /;
-    $recovery = 1 if /^Recovery state 1f/;
-    $synchost = 1 if /^Sync host \d+(\.\d+){3} was set /;
-    if (/Local db version is (\d+\.\d+)/) {
-        $db = "db version $1";
-    }
+    if ($SERVER_TYPE eq 'afs') {
+        $issync = 1 if /^I am sync site /;
+        $recovery = 1 if /^Recovery state 1f/;
+        $synchost = 1 if /^Sync host \d+(\.\d+){3} was set /;
+        if (/Local db version is (\d+\.\d+)/) {
+            $db = "db version $1";
+        }
+    } else {
+        if (/^I\s+ am\s+ coordinator/xms) {
+            $issync = 1;
+        }
+        if (/^Recovery\s+ state\s+ 1f/xms) {
+            $recovery = 1;
+        }
+        if (/^Coordinator\s+ host\s+ \d+(\.\d+){3}\s+ was\s+ set/xms) {
+            $synchost = 1;
+        }
+        if (/^Local\s+ db\s+ version\s+ is\s+ (\d+\.\d+)/xms) {
+            $db = "db version $1";
+        }
+    }        
 }
 close UDEBUG;
 if ($? != 0) {
@@ -130,14 +194,18 @@ B<check_afs_udebug> [B<-hV>] [B<-t> I<timeout>] B<-H> I<host> B<-p> I<port>
 
 =head1 DESCRIPTION
 
-B<check_afs_udebug> is a Nagios plugin for checking AFS database servers
-to make sure the Ubik replication between the database servers is running
-correctly.  B<udebug> is used to connect to the specified port on the
-specified server.  The port should generally be one of 7002 (ptserver),
-7003 (vlserver), or 7004 (kaserver).  The resulting output is checked to
-make sure that the recovery state is 1f if that server is the sync site,
-or that a sync site is known if that server doesn't claim to be the sync
-site.
+B<check_afs_udebug> is a Nagios plugin for checking AFS database
+servers to make sure the Ubik replication between the database servers
+is running correctly.  B<udebug> is used to connect to the specified
+port on the specified server.  The port should generally be one of:
+
+      7002 (ptserver)
+      7003 (vlserver)
+      7004 (kaserver)
+
+The resulting output is checked to make sure that the recovery state
+is 1f if that server is the sync site, or that a sync site is known if
+that server doesn't claim to be the sync site.
 
 B<check_afs_udebug> will always print out a single line of output.  That
 line will be C<UBIK OK> if everything is fine, or C<UBIK CRITICAL - >
@@ -199,18 +267,20 @@ would be.
 
 =head1 SEE ALSO
 
-This script is part of the afs-monitor package, which includes various AFS
-monitoring plugins for Nagios.  It is available from the AFS monitoring
-tools page at L<http://www.eyrie.org/~eagle/software/afs-monitor/>.
+This script is part of the afs-monitor package, which includes various
+AFS monitoring plugins for Nagios.  It is available from
+https://github.com/whm/afs-monitor.
 
 =head1 AUTHORS
 
-Russ Allbery <rra@stanford.edu>
+Russ Allbery <rra@stanford.edu> and Bill MacAllister <bill@ca-zephyr.org>
 
 =head1 COPYRIGHT AND LICENSE
 
 Copyright 2004, 2010, 2013 The Board of Trustees of the Leland Stanford
 Junior University
+
+Copyright 2021 Bill MacAllister <bill@ca-zephyr.org>
 
 This program is free software; you may redistribute it and/or modify it
 under the same terms as Perl itself.

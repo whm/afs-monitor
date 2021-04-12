@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-our $VERSION = '2.4 (2013-01-12)';
+our $VERSION = '2.5 (2021-04-12)';
 #
 # check_afs_rxdebug -- Nagios AFS server check for waiting connections.
 #
@@ -11,8 +11,11 @@ our $VERSION = '2.4 (2013-01-12)';
 #
 # Written by Quanah Gibson-Mount based on work by Neil Crellin
 # Updated by Russ Allbery <rra@stanford.edu>
+# Updated by Bill MacAllister
 # Copyright 2003, 2004, 2005, 2010, 2013
 #     The Board of Trustees of the Leland Stanford Junior University
+# Copyright 2021
+#     Bill MacAllister <bill@ca-zephyr.org>
 #
 # This program is free software; you may redistribute it and/or modify it
 # under the same terms as Perl itself.
@@ -216,9 +219,9 @@ would be.
 
 =head1 SEE ALSO
 
-This script is part of the afs-monitor package, which includes various AFS
-monitoring plugins for Nagios.  It is available from the AFS monitoring
-tools page at L<http://www.eyrie.org/~eagle/software/afs-monitor/>.
+This script is part of the afs-monitor package, which includes various
+AFS monitoring plugins for Nagios.  It is available from
+https://github.com/whm/afs-monitor.
 
 =head1 AUTHORS
 
@@ -227,10 +230,14 @@ updated by Quanah Gibson-Mount to work with Nagios, and then further
 updated by Russ Allbery <rra@stanford.edu> to support more standard
 options and to use a more uniform coding style.
 
+Updates to support Auristor were made by Bill MacAllister.
+
 =head1 COPYRIGHT AND LICENSE
 
 Copyright 2003, 2004, 2005, 2010, 2013 The Board of Trustees of the Leland
 Stanford Junior University
+
+Copyright 2021 Bill MacAllister <bill@ca-zephyr.org>
 
 This program is free software; you may redistribute it and/or modify it
 under the same terms as Perl itself.

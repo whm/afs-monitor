@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-our $VERSION = '2.4 (2013-01-12)';
+our $VERSION = '2.5 (2021-04-12)';
 #
 # check_afs_quotas -- Monitor AFS quota usage under Nagios.
 #
@@ -11,8 +11,11 @@ our $VERSION = '2.4 (2013-01-12)';
 #
 # Written by Russ Allbery <rra@stanford.edu>
 # Based on a script by Steve Rader
+# Updated by Bill MacAllister
 # Copyright 2010, 2013
 #     The Board of Trustees of the Leland Stanford Junior University
+# Copyright 2021
+#     Bill MacAllister <bill@ca-zephyr.org>
 #
 # This program is free software; you may redistribute it and/or modify it
 # under the same terms as Perl itself.
@@ -37,6 +40,11 @@ unless ($@) {
     $FORMAT = 1;
 }
 
+# Server type
+our $SERVER_TYPE;
+
+my $opt_debug;
+
 ##############################################################################
 # Site configuration
 ##############################################################################
@@ -59,6 +67,28 @@ $VOS ||= 'vos';
 # AFS operations
 ##############################################################################
 
+# Determine the type of server we are talking into, afs or auristor.
+sub set_server_type {
+    my ($type) = @_;
+    if (defined $type and length($type)) {
+        $SERVER_TYPE = $type;
+    } else {
+        if (-e '/etc/yfs') {
+            $SERVER_TYPE = 'auristor';
+        } else {
+            $SERVER_TYPE = 'afs';
+        }
+    }
+    if ($SERVER_TYPE =~ /^af/xms) {
+        $SERVER_TYPE = 'afs';
+    } elsif ($SERVER_TYPE =~ /^au/xms) {
+        $SERVER_TYPE = 'auristor';
+    } else {
+        syntax("Unknown server type ($SERVER_TYPE)");
+    }
+    return $SERVER_TYPE;
+}
+
 # Given a volume name, determines various characteristics of the volume and
 # returns them in a hash.  'size' gets the volume size in KB, 'quota' gets the
 # volume quota in KB, and 'rwserver' and 'rwpart' get the server and partition
@@ -66,23 +96,50 @@ $VOS ||= 'vos';
 sub volinfo {
     my ($volume) = @_;
     my (%results);
-    unless (open (VEX, '-|', $VOS, 'examine', $volume, '-noauth')) {
+    my @cmd;
+    if ($SERVER_TYPE eq 'afs') {
+        @cmd = ($VOS, 'examine', $volume, '-noauth');
+    } else {
+        @cmd = ($VOS, 'examine', $volume, '-format');
+    }
+    if ($opt_debug) {
+        print("Executing: $VOS " . join(' ', @cmd) . "\n");
+    }
+    if (! (open(VEX, '-|', @cmd)) ) {
         print "AFS CRITICAL - cannot contact server\n";
         exit 2;
     }
     local $_;
     while (<VEX>) {
-        if (/^\Q$volume\E\s+\d+ (RW|RO|BK)\s+(\d+) K\s+On-line\s*$/) {
-            $results{size} = $2;
-        } elsif (/^\s+server ([^.\s]+)\.\S+ partition (\S+) RW Site\s*/) {
-            $results{rwserver} = $1;
-            $results{rwpart} = $2;
-        } elsif (/^\s+MaxQuota\s+(\d+) K\s*$/) {
-            $results{quota} = $1;
+        if ($SERVER_TYPE eq 'afs') {
+            if (/^\Q$volume\E\s+\d+ (RW|RO|BK)\s+(\d+) K\s+On-line\s*$/) {
+                $results{size} = $2;
+            } elsif (/^\s+server ([^.\s]+)\.\S+ partition (\S+) RW Site\s*/) {
+                $results{rwserver} = $1;
+                $results{rwpart} = $2;
+            } elsif (/^\s+MaxQuota\s+(\d+) K\s*$/) {
+                $results{quota} = $1;
+            }
+        } else {
+            if (/^diskuser\t (\d+)/xms) {
+                $results{site_server_0} = $1;
+            } elsif (/^serv\t (\S+)\t (\S+)\t (\S+)/xms) {
+                my $ip          = $1;
+                my $server_port = $2;
+                my $id          = $3;
+                my ($server, $port) = split /:/, $server_port, 2;
+                $results{rwserver} = $server;
+            } elsif (/^site_partition_0\t (\S+)/xms) {
+                $results{rwpart} = $1;
+            } elsif (/^maxquota\t (\d+)/xms) {
+                $results{quote} = $1;
+            }
         }
     }
     close VEX;
-    return unless $results{size};
+    if (!$results{size}) {
+        return;
+    }
     return %results;
 }
 
@@ -92,29 +149,69 @@ sub volinfo {
 # containing 'size' and 'quota' keys and values in KB.
 sub serverinfo {
     my ($server, $partition, $regex) = @_;
-    my @command = ($VOS, 'listvol', '-server', $server, '-long', '-noauth');
+    my @cmd;
+    if ($SERVER_TYPE eq 'afs') {
+        @cmd = ('listvol', '-server', $server, '-long', '-noauth');
+    } else {
+        @cmd = ('listvol', '-server', $server, '-long', '-format');
+    }
+    my @command = ($VOS, @cmd);
     if (defined ($partition)) {
         push (@command, '-partition', $partition);
+    }
+    if ($opt_debug) {
+        print('Executing: ' . join(' ', @command) . "\n");
     }
     unless (open (LVOL, '-|', @command)) {
         print "AFS CRITICAL - cannot contact server\n";
         exit 2;
     }
-    my ($volume, $size, %results);
+    my ($volume, $size, $quota, %results);
     local $_;
+    my $vol_start;
     while (<LVOL>) {
-        if (/^(\S+)\s+\d+ RW\s+(\d+) K\s+On-line\s*$/) {
-            ($volume, $size) = ($1, $2);
-            if (!defined ($regex) || $volume =~ /$regex/) {
-                $results{$volume}{size} = $size;
-            } else {
+        if ($SERVER_TYPE eq 'afs') {
+            if (/^(\S+)\s+\d+ RW\s+(\d+) K\s+On-line\s*$/) {
+                ($volume, $size) = ($1, $2);
+                if (!defined ($regex) || $volume =~ /$regex/) {
+                    $results{$volume}{size} = $size;
+                } else {
+                    $volume = undef;
+                }
+            } elsif (/^\s+MaxQuota\s+(\d+) K\s*$/ && defined $volume) {
+                $results{$volume}{quota} = $1;
+                $volume = undef;
+            } elsif (/^\s*$/) { # next volume
                 $volume = undef;
             }
-        } elsif (/^\s+MaxQuota\s+(\d+) K\s*$/ && defined $volume) {
-            $results{$volume}{quota} = $1;
-            $volume = undef;
-        } elsif (/^\s*$/) { # next volume
-            $volume = undef;
+        } else {
+            if (/^BEGIN_ENTRY/xms) {
+                $vol_start = 1;
+                if ($opt_debug) {
+                    print("BEGIN_ENTRY found\n");
+                }
+            } elsif (/^END_OF_ENTRY/xms) {
+                if (defined $volume) {
+                    $results{$volume}{quota} = $quota;
+                    $results{$volume}{size}  = $size;
+                }
+                $vol_start = 0;
+                $volume = undef;
+                $quota  = 0;
+                $size   = 0;
+                if ($opt_debug) {
+                    print("END_ENTRY found\n");
+                }
+            } elsif (/^maxquota\t (\d+)/xms) {
+                $quota = $1;
+            } elsif (/^diskused\t (\d+)/xms) {
+                $size = $1;
+            } elsif (/^name\t (\S+)/xms) {
+                $volume = $1;
+                if ($opt_debug) {
+                    print("volume: $volume\n");
+                }
+            }
         }
     }
     return %results;
@@ -136,6 +233,8 @@ sub summarize_volume {
     my $percent = 0;
     if ($total > 0) {
         $percent = int ((($total - $free) / $total) * 100);
+    } else {
+        $percent = 0;
     }
     if ($FORMAT) {
         $total = format_bytes ($total, mode => 'iec');
@@ -161,13 +260,15 @@ sub syntax {
 }
 
 # Parse command line options.
-my ($help, $host, $partition, $regex, $version, $volume);
+my ($help, $host, $opt_server, $partition, $regex, $version, $volume);
 Getopt::Long::config ('bundling', 'no_ignore_case');
 GetOptions ('c|critical=i'  => \$CRITICAL,
+            'D|debug'       => \$opt_debug,
             'H|hostname=s'  => \$host,
             'h|help'        => \$help,
             'n|volume=s'    => \$volume,
             'r|regex=s'     => \$regex,
+            's|server=s'    => \$opt_server,
             'p|partition=s' => \$partition,
             't|timeout=i'   => \$TIMEOUT,
             'V|version'     => \$version,
@@ -181,11 +282,15 @@ if ($help) {
     print "check_afs_quotas $version\n";
     exit 0;
 }
-syntax ("extra arguments on command line") if @ARGV;
-syntax ("host or volume to check not specified")
-    unless (defined ($host) || defined ($volume));
-syntax ("regex specified without host to check")
-    if (defined ($regex) && !defined ($host));
+if (@ARGV) {
+    syntax ("extra arguments on command line");
+}
+if (! (defined ($host) || defined ($volume)) ) {
+    syntax ("host or volume to check not specified");
+}
+if (defined ($regex) && !defined ($host)) {
+    syntax ("regex specified without host to check");
+}
 if ($WARNINGS > $CRITICAL) {
     syntax ("warning level $WARNINGS greater than critical level $CRITICAL");
 }
@@ -196,6 +301,9 @@ $SIG{ALRM} = sub {
     exit 2;
 };
 alarm ($TIMEOUT);
+
+# Set the server type
+set_server_type($opt_server);
 
 # Do the actual check.
 if (defined ($volume)) {
@@ -255,9 +363,9 @@ check_afs_quotas - Monitor AFS quota usage under Nagios
 
 =head1 SYNOPSIS
 
-B<check_afs_quotas> [B<-hV>] [B<-c> I<threshold>] [B<-w> I<threshold>]
+B<check_afs_quotas> [B<-DhV>] [B<-c> I<threshold>] [B<-w> I<threshold>]
     [B<-t> I<timeout>] (B<-H> I<host> [B<-p> I<partition>] | B<-n> I<volume>)
-    [B<-r> I<regex>]
+    [B<-r> I<regex>] [B<-s> I<afs|auristor>]
 
 =head1 DESCRIPTION
 
@@ -298,6 +406,10 @@ an integer percentage.  The default is 90.
 The AFS file server whose volumes to check for quota usage.  Either this
 option or the B<-n> option is required.
 
+=item B<-D>, B<--debug>
+
+Display debugging messages.
+
 =item B<-h>, B<--help>
 
 Print out this documentation (which is done simply by feeding the script
@@ -319,6 +431,11 @@ full partition name C</vicepa> will work).
 
 When processing an entire server (B<-H>), ignore any volumes that don't
 match the specified Perl regular expression.
+
+=item B<-s> I<afs|auristor>
+
+Set the server type, either 'afs' or 'auristor'.  The default is 'afs'
+unless the directory '/etc/yfs' exists.
 
 =item B<-t> I<timeout>, B<--timeout>=I<timeout>
 
@@ -367,14 +484,18 @@ would be.
 vos(1)
 
 This script is part of the afs-monitor package, which includes various AFS
-monitoring plugins for Nagios.  It is available from the AFS monitoring
-tools page at L<http://www.eyrie.org/~eagle/software/afs-monitor/>.
+monitoring plugins for Nagios.  It is available from 
+https://github.com/whm/afs-monitor.
 
 =head1 AUTHORS
 
 Written by Russ Allbery based on a similar script by Steve Rader.
 
+Modified by Bill MacAllister to support Auristor servers.
+
 =head1 COPYRIGHT AND LICENSE
+
+Copyright 2021 Bill MacAllister <bill@ca-zephyr.org>
 
 Copyright 2010, 2013 The Board of Trustees of the Leland Stanford Junior
 University

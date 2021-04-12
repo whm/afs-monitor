@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-our $VERSION = '2.4 (2013-01-12)';
+our $VERSION = '2.5 (2021-04-12)';
 #
 # check_afs_bos -- Monitor AFS bos output for problems in Nagios.
 #
@@ -10,9 +10,12 @@ our $VERSION = '2.4 (2013-01-12)';
 # Nagios.
 #
 # Written by Russ Allbery <rra@stanford.edu>
+# Updated by Bill MacAllister
 # Based on an earlier script by Neil Crellin <neilc@stanford.edu>
 # Copyright 2003, 2004, 2010, 2013
 #     The Board of Trustees of the Leland Stanford Junior University
+# Copyright 2021
+#     Bill MacAllister <bill@ca-zephyr.org>
 #
 # This program is free software; you may redistribute it and/or modify it
 # under the same terms as Perl itself.
@@ -251,9 +254,9 @@ would be.
 
 =head1 SEE ALSO
 
-This script is part of the afs-monitor package, which includes various AFS
-monitoring plugins for Nagios.  It is available from the AFS monitoring
-tools page at L<http://www.eyrie.org/~eagle/software/afs-monitor/>.
+This script is part of the afs-monitor package, which includes various
+AFS monitoring plugins for Nagios.  It is available from
+https://github.com/whm/afs-monitor.
 
 =head1 AUTHORS
 
@@ -262,10 +265,14 @@ The original idea behind this script was from Neil Crellin.  Russ Allbery
 rather neat but now unnecessary code to look for any changes in the bos
 output, instead just scanning it for acceptable lines.
 
+Updates made by Bill MacAllister.
+
 =head1 COPYRIGHT AND LICENSE
 
 Copyright 2003, 2004, 2010, 2013 The Board of Trustees of the Leland
 Stanford Junior University
+
+Copyright 2021 Bill MacAllister <bill@ca-zephyr.org>
 
 This program is free software; you may redistribute it and/or modify it
 under the same terms as Perl itself.

@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-our $VERSION = '2.4 (2013-01-12)';
+our $VERSION = '2.5 (2021-04-12)';
 #
 # check_afs_space -- Monitor AFS disk space usage under Nagios.
 #
@@ -10,8 +10,11 @@ our $VERSION = '2.4 (2013-01-12)';
 #
 # Written by Susan Feng <sfeng@stanford.edu>
 # Updated by Russ Allbery <rra@stanford.edu>
+# Updated by Bill MacAllister <bill@ca-zephyr.org>
 # Copyright 2003, 2004, 2010, 2013
 #     The Board of Trustees of the Leland Stanford Junior University
+# Copyright 2021
+#     Bill MacAllister <bill@ca-zephyr.org>
 #
 # This program is free software; you may redistribute it and/or modify it
 # under the same terms as Perl itself.
@@ -35,6 +38,12 @@ eval {
 unless ($@) {
     $FORMAT = 1;
 }
+
+# Server type: afs or auristor
+my $SERVER_TYPE;
+
+# Command line switch used globally in the script
+my $opt_debug;
 
 ##############################################################################
 # Site configuration
@@ -67,14 +76,42 @@ sub syntax {
     exit 3;
 }
 
+# Determine the type of server we are talking into, afs or auristor.
+sub set_server_type {
+    my ($type) = @_;
+    if (defined $type and length($type)) {
+        $SERVER_TYPE = $type;
+    } else {
+        if (-e '/etc/yfs') {
+            $SERVER_TYPE = 'auristor';
+        } else {
+            $SERVER_TYPE = 'afs';
+        }
+    }
+    if ($SERVER_TYPE =~ /^af/xms) {
+        $SERVER_TYPE = 'afs';
+    } elsif ($SERVER_TYPE =~ /^au/xms) {
+        $SERVER_TYPE = 'auristor';
+    } else {
+        syntax("Unknown server type ($SERVER_TYPE)");
+    }
+    return $SERVER_TYPE;
+}
+
+##############################################################################
+# Main Routine
+##############################################################################
+
 # Parse command line options.
-my ($help, $host, $partition, $printdata, $version);
+my ($help, $host, $opt_server, $partition, $printdata, $version);
 Getopt::Long::config ('bundling', 'no_ignore_case');
 GetOptions ('c|critical=i'  => \$CRITICAL,
+            'D|debug'       => \$opt_debug,
             'd|perfdata'    => \$printdata,
             'H|hostname=s'  => \$host,
             'h|help'        => \$help,
             'p|partition=s' => \$partition,
+            's|server=s'    => \$opt_server,
             't|timeout=i'   => \$TIMEOUT,
             'V|version'     => \$version,
             'w|warning=i'   => \$WARNINGS)
@@ -86,14 +123,22 @@ if ($help) {
     print "check_afs_space $VERSION\n";
     exit 0;
 }
-syntax ("extra arguments on command line") if @ARGV;
-syntax ("host to check not specified") unless (defined $host);
+if (@ARGV) {
+    syntax ("extra arguments on command line");
+}
+if (! defined $host) {
+    syntax ("host to check not specified");
+}
 if ($WARNINGS > $CRITICAL) {
     syntax ("warning level $WARNINGS greater than critical level $CRITICAL");
 }
 if ($partition) {
-    $partition = "/vicep$partition" if length ($partition) <= 2;
-    $partition = "/$partition" if $partition !~ m%^/%;
+    if (length ($partition) <= 2) {
+        $partition = "/vicep$partition";
+    }
+    if ($partition !~ m%^/%) {
+        $partition = "/$partition";
+    }
 }
 
 # Set up the alarm.
@@ -103,22 +148,45 @@ $SIG{ALRM} = sub {
 };
 alarm ($TIMEOUT);
 
+# Set the server type
+set_server_type($opt_server);
+
 # Get the partinfo information and calculate the percentage free for each
 # partition.  Accumulate critical messages in @critical and warnings in
 # @warnings.  Accumulate all percentages in @all.  Accumulate performance data
 # in @perfdata.
 my (@critical, @warnings, @all, @perfdata);
 my $command = "$VOS partinfo -server '$host'";
-$command .= " -partition $partition" if defined ($partition);
+if (defined ($partition)) {
+    $command .= " -partition $partition";
+}
+if ($opt_debug) {
+    print "Executing: $command\n";
+}
 my @data = `$command 2> /dev/null`;
 if ($? != 0) {
     print "AFS CRITICAL - cannot contact server\n";
     exit 2;
 }
-$partition .= ':' if defined $partition;
+if (defined $partition) {
+    $partition .= ':';
+}
 for (@data) {
-    my ($part, $free, $total) = (split)[4,5,11];
-    next if (defined ($partition) and $part ne $partition);
+    my $part;
+    my $free;
+    my $total;
+    if ($SERVER_TYPE eq 'afs') {
+        ($part, $free, $total) = (split)[4,5,11];
+    } else {
+        my @tokens = split /\s+/, $_;
+        $part  = $tokens[6];
+        $free  = $tokens[7];
+        $total = $tokens[13];
+    }
+    
+    if (defined ($partition) and $part ne $partition) {
+        next;
+    }
     my $percent = int ((($total - $free) / $total) * 100);
     my $used = $total - $free;
     if ($FORMAT) {
@@ -287,9 +355,9 @@ would be.
 
 vos(1)
 
-This script is part of the afs-monitor package, which includes various AFS
-monitoring plugins for Nagios.  It is available from the AFS monitoring
-tools page at L<http://www.eyrie.org/~eagle/software/afs-monitor/>.
+This script is part of the afs-monitor package, which includes various
+AFS monitoring plugins for Nagios.  It is available from
+https://github.com/whm/afs-monitor.
 
 =head1 AUTHORS
 
@@ -303,6 +371,8 @@ work by Steve Rader.
 
 Copyright 2003, 2004, 2010, 2013 The Board of Trustees of the Leland
 Stanford Junior University
+
+Copyright 2021 Bill MacAllister <bill@ca-zephyr.org>
 
 This program is free software; you may redistribute it and/or modify it
 under the same terms as Perl itself.

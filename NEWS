@@ -1,5 +1,9 @@
                      User-Visible afs-monitor Changes
 
+afs-monitor 2.5 (2021-04-12)
+
+    Support for Auristor file servers was added.
+    
 afs-monitor 2.4 (2013-01-12)
 
     Support filtering the volumes considered on a particular server by a
