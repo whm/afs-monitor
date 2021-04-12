@@ -1,0 +1,86 @@
+                     User-Visible afs-monitor Changes
+
+afs-monitor 2.4 (2013-01-12)
+
+    Support filtering the volumes considered on a particular server by a
+    regular expression in check_afs_quotas.  The regular expression is
+    specified with a new -r option.  Patch from Christian Ospelkaus.
+
+    Also ignore bos status output from long-running scheduled jobs, such
+    as AFS backups, in check_bos_status.  Patch from Georg Sluyterman.
+
+afs-monitor 2.3 (2013-01-09)
+
+    Fix bug in check_afs_quotas when checking all volumes on a partition
+    that has read-only or backup volumes.  Patch from Michael Meffie.
+    Thanks also to Georg Sluyterman and Christian Ospelkaus.
+
+    Correctly ignore bos status output from scheduled jobs in
+    check_afs_bos.  Patch from Georg Sluyterman.
+
+afs-monitor 2.2 (2011-03-03)
+
+    Add a -d flag to check_afs_space that prints out Nagios performance
+    data for the percent usage of each partition checked.  Based on a
+    patch by Breandan Dezendorf.
+
+    Correctly handle partitions containing no read/write volumes in
+    check_afs_quotas.  Thanks, Daniel Scott.
+
+    The vos binary is installed in sbin by the Red Hat packages and the
+    default upstream installation rules, so check in sbin as well as bin.
+    Patch from Daniel Scott.  Also fall back, for all AFS binaries, to
+    using PATH if the binary can't be found in known locations.
+
+    Correctly handle checking quota of volumes with unlimited quota
+    without a division by zero error.  Patch from Erik Dalén.
+
+afs-monitor 2.1 (2010-12-08)
+
+    Fix a bug in check_afs_space introduced in the previous release with
+    checking all partitions on a particular server.
+
+afs-monitor 2.0 (2010-12-07)
+
+    Initial tarball release, based on check_afsspace 1.16, check_bos 1.7,
+    check_rxdebug 1.11, and check_udebug 1.3.
+
+    Rename check_afsspace to check_afs_space, check_bos to check_afs_bos,
+    check_rxdebug to check_afs_rxdebug, and check_udebug to
+    check_afs_udebug for more consistent naming and easier identification
+    of the AFS Nagios probes.
+
+    Add check_afs_quotas, which monitors AFS volumes for quota usage,
+    either for specific volumes or for all volumes on a particular server
+    (and optionally partition).  Based on a script by Steve Rader.
+
+    Support checking a single partition in check_afs_space and print more
+    verbose information about total, used, and free space in that mode.
+    Format partition sizes using Number::Format if available.  Based on
+    work by Steve Rader.
+
+    If the salvager is running (such as when started manually with bos
+    salvage), check_afs_wbos now reports a warning stating that, rather
+    than a critical error showing the auxiliary status line.  Reported by
+    Steve Rader.
+
+    Print an UNKNOWN status on standard output on syntax errors in all
+    scripts, rather than reporting the problem only to standard error.
+    Check that the host to check was specified and report a syntax error
+    if it wasn't.  Thanks, Tobias Wolter.
+
+    Ignore "bos: running unauthenticated" in check_afs_bos, since bos
+    status is always run unauthenticated.
+
+    Add support for reporting warnings in check_afs_bos and report a
+    warning if there is inappropriate access on server directories.  Patch
+    from Steve Rader.
+
+    If check_afs_bos is successful, report the number of instances running
+    normally.  Patch from Steve Rader.
+
+    Look for rxdebug in /usr/sbin and /usr/local/sbin since OpenAFS
+    installs it into sbindir by default.
+
+    Report the database version as extra information in check_afs_udebug
+    if there are no errors or warnings.

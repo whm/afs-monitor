@@ -1,0 +1,310 @@
+#!/usr/bin/perl -w
+our $VERSION = '2.4 (2013-01-12)';
+#
+# check_afs_space -- Monitor AFS disk space usage under Nagios.
+#
+# Expects a host with the -H option and checks the partition usage with vos
+# partinfo.  Exits with status 1 if the free space is below a warning
+# percentage and with status 2 if the free space is above a critical
+# percentage (this works with the Nagios check architecture).
+#
+# Written by Susan Feng <sfeng@stanford.edu>
+# Updated by Russ Allbery <rra@stanford.edu>
+# Copyright 2003, 2004, 2010, 2013
+#     The Board of Trustees of the Leland Stanford Junior University
+#
+# This program is free software; you may redistribute it and/or modify it
+# under the same terms as Perl itself.
+
+##############################################################################
+# Modules and declarations
+##############################################################################
+
+require 5.006;
+
+use strict;
+
+use Getopt::Long qw(GetOptions);
+
+# Use Number::Format if it's available, but don't require it.
+our $FORMAT = 0;
+eval {
+    require Number::Format;
+    Number::Format->import ('format_bytes');
+};
+unless ($@) {
+    $FORMAT = 1;
+}
+
+##############################################################################
+# Site configuration
+##############################################################################
+
+# The default percentage full at which to warn and at which to send a critical
+# alert.  These can be overridden with the -w and -c command-line options.
+our $WARNINGS = 85;
+our $CRITICAL = 90;
+
+# The default timeout in seconds (implemented by alarm) for vos partinfo.
+our $TIMEOUT = 300;
+
+# The full path to vos.  Make sure that this is on local disk so that
+# monitoring doesn't have an AFS dependency.
+our ($VOS) = grep { -x $_ }
+    qw(/usr/bin/vos /usr/sbin/vos /usr/local/bin/vos /usr/local/sbin/vos);
+$VOS ||= 'vos';
+
+##############################################################################
+# Implementation
+##############################################################################
+
+# Report a syntax error and exit.  We do this via stdout in order to satisfy
+# the Nagios plugin output requirements, but also report a more conventional
+# error via stderr in case people are calling this outside of Nagios.
+sub syntax {
+    print "AFS UNKNOWN - ", join ('', @_), "\n";
+    warn "$0: ", join ('', @_), "\n";
+    exit 3;
+}
+
+# Parse command line options.
+my ($help, $host, $partition, $printdata, $version);
+Getopt::Long::config ('bundling', 'no_ignore_case');
+GetOptions ('c|critical=i'  => \$CRITICAL,
+            'd|perfdata'    => \$printdata,
+            'H|hostname=s'  => \$host,
+            'h|help'        => \$help,
+            'p|partition=s' => \$partition,
+            't|timeout=i'   => \$TIMEOUT,
+            'V|version'     => \$version,
+            'w|warning=i'   => \$WARNINGS)
+    or syntax ("invalid option");
+if ($help) {
+    print "Feeding myself to perldoc, please wait....\n";
+    exec ('perldoc', '-t', $0) or die "Cannot fork: $!\n";
+} elsif ($version) {
+    print "check_afs_space $VERSION\n";
+    exit 0;
+}
+syntax ("extra arguments on command line") if @ARGV;
+syntax ("host to check not specified") unless (defined $host);
+if ($WARNINGS > $CRITICAL) {
+    syntax ("warning level $WARNINGS greater than critical level $CRITICAL");
+}
+if ($partition) {
+    $partition = "/vicep$partition" if length ($partition) <= 2;
+    $partition = "/$partition" if $partition !~ m%^/%;
+}
+
+# Set up the alarm.
+$SIG{ALRM} = sub {
+    print "AFS CRITICAL - network timeout after $TIMEOUT seconds\n";
+    exit 2;
+};
+alarm ($TIMEOUT);
+
+# Get the partinfo information and calculate the percentage free for each
+# partition.  Accumulate critical messages in @critical and warnings in
+# @warnings.  Accumulate all percentages in @all.  Accumulate performance data
+# in @perfdata.
+my (@critical, @warnings, @all, @perfdata);
+my $command = "$VOS partinfo -server '$host'";
+$command .= " -partition $partition" if defined ($partition);
+my @data = `$command 2> /dev/null`;
+if ($? != 0) {
+    print "AFS CRITICAL - cannot contact server\n";
+    exit 2;
+}
+$partition .= ':' if defined $partition;
+for (@data) {
+    my ($part, $free, $total) = (split)[4,5,11];
+    next if (defined ($partition) and $part ne $partition);
+    my $percent = int ((($total - $free) / $total) * 100);
+    my $used = $total - $free;
+    if ($FORMAT) {
+        $total = format_bytes ($total, mode => 'iec');
+        $free  = format_bytes ($free,  mode => 'iec');
+        $used  = format_bytes ($used,  mode => 'iec');
+    }
+    my $ppart = $part . '_percent';
+    $ppart =~ tr%:/%%d;
+    push (@perfdata, "$ppart=$percent\%;$WARNINGS;$CRITICAL;0;100");
+    my $summary;
+    if ($partition) {
+        $summary = "$part$percent% used"
+            . " ($total total, $used used, $free free)";
+    } else {
+        $summary = "$part$percent% (free $free)";
+    }
+    if ($percent >= $CRITICAL) {
+        push (@critical, $summary);
+    } elsif ($percent >= $WARNINGS) {
+        push (@warnings, $summary);
+    }
+    if ($partition) {
+        push (@all, $summary);
+    } else {
+        push (@all, "$part$percent%");
+    }
+}
+unless (@all) {
+    print "AFS CRITICAL - no partition found\n";
+    exit 2;
+}
+
+# Exit with the appropriate error messages.
+my $perfdata = '';
+if ($printdata) {
+    $perfdata = ' | ' . join (' ', @perfdata);
+}
+if (@critical) {
+    print "AFS CRITICAL - @critical$perfdata\n";
+    exit 2;
+} elsif (@warnings) {
+    print "AFS WARNING - @warnings$perfdata\n";
+    exit 1;
+} else {
+    print "AFS OK - @all$perfdata\n";
+    exit 0;
+}
+
+##############################################################################
+# Documentation
+##############################################################################
+
+=for stopwords
+AFS Feng Nagios Quanah Rader afs-monitor -dhV mon --perfdata util -vv
+
+=head1 NAME
+
+check_afs_space - Monitor AFS disk space usage under Nagios
+
+=head1 SYNOPSIS
+
+B<check_afs_space> [B<-dhV>] [B<-c> I<threshold>] [B<-w> I<threshold>]
+    [B<-p> I<partition>] [B<-t> I<timeout>] B<-H> I<host>
+
+=head1 DESCRIPTION
+
+B<check_afs_space> is a Nagios plugin for checking free space on AFS server
+partitions.  It uses C<vos partinfo> to obtain the free space on the
+partitions on an AFS server and will return an alert if the percentage of
+used space exceeds a threshold.  By default, it returns a critical error
+if the used space is over 90% and a warning if it is over 85% (changeable
+with the B<-c> and B<-w> options).
+
+If C<vos partinfo> doesn't return within the timeout, B<check_afs_space>
+will return a critical error.  The default timeout is 300 seconds,
+changeable with the B<-t> option.
+
+B<check_afs_space> will always print out a single line of output, giving
+the critical errors if any, otherwise giving the warnings if any,
+otherwise listing in an abbreviated form the percentage free space for all
+partitions.
+
+The check can be limited to a single partition by specifying that
+partition with the B<-p> option.  In this case, more verbose information
+about the total, used, and free space is given in the one line of output.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-c> I<threshold>, B<--critical>=I<threshold>
+
+Change the critical percentage threshold to I<threshold>, which should be
+an integer percentage.  The default is 90.
+
+=item B<-d>, B<--perfdata>
+
+Include performance data in the plugin output.  This adds an additional
+section of the output following a vertical bar (C<|>) following the Nagios
+plugin standard for performance data.  There will be one variable for each
+partition checked, named C<I<partition>_percent>, where I<partition> is the
+partition without the leading slash.  The value will be the usage percentage.
+
+=item B<-H> I<host>, B<--hostname>=I<host>
+
+The AFS file server whose free space B<check_afs_space> should check.  This
+option is required.
+
+=item B<-h>, B<--help>
+
+Print out this documentation (which is done simply by feeding the script
+to C<perldoc -t>).
+
+=item B<-p> I<partition>, B<--partition>=I<partition>
+
+Limit the results to the specified partition.  The partition can be given
+as the partition letter (C<a>, for example) or the full partition name
+(C</vicepa>), with or without the leading slash.  If this option is given,
+only that partition will be checked and more verbose information about
+total, used, and free space will be printed.
+
+=item B<-t> I<timeout>, B<--timeout>=I<timeout>
+
+Change the timeout for the C<vos partinfo> command.  The default timeout
+is 300 seconds.
+
+=item B<-V>, B<--version>
+
+Print out the version of B<check_afs_space> and quit.
+
+=item B<-w> I<threshold>, B<--warning>=I<threshold>
+
+Change the warning percentage threshold to I<threshold>, which should be
+an integer percentage.  The default is 85.
+
+=back
+
+=head1 EXIT STATUS
+
+B<check_afs_space> follows the standard Nagios exit status requirements.
+This means that it will exit with status 0 if there are no problems, with
+status 2 if there is at least one critical partition for that server, and
+with status 1 if there are no critical partitions but at least one warning
+partition.  For other errors, such as invalid syntax, B<check_afs_space>
+will exit with status 3.
+
+=head1 BUGS
+
+The standard B<-v> verbose Nagios plugin option is not supported and
+should be.  (For example, under B<-vv> we would want to show the actual
+total, free, and used byte counts, not just the percentages.)
+
+The usage message for invalid options and for the B<-h> option doesn't
+conform to Nagios standards.
+
+=head1 CAVEATS
+
+This script does not use the Nagios util library or any of the defaults
+that it provides, which makes it somewhat deficient as a Nagios plugin.
+This is intentional, though, since this script can be used with other
+monitoring systems as well.  It's not clear what a good solution to this
+would be.
+
+=head1 SEE ALSO
+
+vos(1)
+
+This script is part of the afs-monitor package, which includes various AFS
+monitoring plugins for Nagios.  It is available from the AFS monitoring
+tools page at L<http://www.eyrie.org/~eagle/software/afs-monitor/>.
+
+=head1 AUTHORS
+
+Originally written by Susan Feng for use with mon.  Updated by Quanah
+Gibson-Mount to work with Nagios, and then further updated by Russ Allbery
+<rra@stanford.edu> to support more standard options and to use a more
+uniform coding style.  Support for checking a single partition based on
+work by Steve Rader.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2003, 2004, 2010, 2013 The Board of Trustees of the Leland
+Stanford Junior University
+
+This program is free software; you may redistribute it and/or modify it
+under the same terms as Perl itself.
+
+=cut

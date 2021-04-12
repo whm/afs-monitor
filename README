@@ -1,0 +1,154 @@
+                         afs-monitor release 2.4
+            (Nagios-compatible probes to monitor AFS servers)
+
+              Maintained by Russ Allbery <rra@stanford.edu>
+
+  This program is free software; you may redistribute it and/or modify it
+  under the same terms as Perl itself.  Please see the section LICENSE
+  below for more information.
+
+BLURB
+
+  afs-monitor provides Nagios-compatible probe scripts that can be used to
+  monitor AFS servers.  It contains five scripts: check_afs_quotas, which
+  monitors AFS volumes for quota usage; check_afs_space, which monitors
+  file server partitions for disk usage; check_afs_bos, which monitors any
+  bosserver-managed set of processes for problems reported by bos;
+  check_afs_rxdebug, which monitors AFS fileservers for connections
+  waiting for a thread; and check_afs_udebug, which monitors Ubik services
+  (such as vlserver and ptserver) for replication and quorum problems.
+
+DESCRIPTION
+
+  This is a collection of Nagios plugin scripts for monitoring various
+  aspects of AFS servers.  They all follow the Nagios standards for
+  check_* scripts (although don't support a few features) and use exit
+  statuses that give Nagios the right information.  They don't use any
+  Nagios-specific libraries, however, and should be suitable for use with
+  other monitoring systems such as mon.  Any monitoring system that
+  understands remote checks for services should be able to use these
+  scripts with some adaptation.
+
+  check_afs_quotas checks either a single volume or all volumes on a
+  server or server partition for quota usage and reports errors or
+  warnings if the used space is over a configurable threshold.
+
+  check_afs_space uses vos partinfo to check the available space on each
+  partition on a file server.  It reports a critical error if the
+  percentage used is above a configurable threshold (90% by default) and a
+  warning if it is above a lower configurable threshold (85% by default).
+
+  check_afs_bos runs bos status on a file server or volume location server
+  and scans the output, making sure that all commands are running normally
+  and the file server isn't salvaging.  If it sees any output it doesn't
+  expect from bos status, it reports that output in an alert.
+
+  check_afs_rxdebug runs rxdebug against a file server and looks for any
+  client connections that are in the state "waiting for a thread."  This
+  indicates client connections that are blocked waiting for a file server
+  thread.  We've found this to be a reliable test for detecting serious
+  file server performance problems.  It reports a critical error if the
+  count of such connections is above a configurable level (8 by default)
+  and a warning if it is above a lower configurable threshold (2 by
+  default).
+
+  check_afs_udebug runs udebug against a ubik service (vlserver, ptserver,
+  kaserver, or buserver) and makes sure that it is in a reasonable state.
+  It checked to be sure that there is a sync site for the service, and
+  when there is, that the sync site believes that the recovery state is 1f
+  (indicating that all of the slaves have the same version of the
+  database).
+
+  These scripts were written by Xueshan Feng, Neil Crellin, Quanah
+  Gibson-Mount, and Russ Allbery and are currently maintained by Russ
+  Allbery.  Many modifications to the scripts were based on work by Steve
+  Rader.
+
+REQUIREMENTS
+
+  All the plugin scripts are written in Perl and should work with Perl
+  5.006 or later.  They require the AFS client binaries (specifically vos,
+  bos, rxdebug, and udebug) and expect them to be in either /usr/bin or in
+  /usr/local/bin.
+
+  check_afs_quotas and check_afs_space will use Number::Format, if
+  available, to format sizes with IEC 60027 prefixes.
+
+INSTALLATION
+
+  All that's required for installation is to copy the check_* scripts into
+  whatever directory you want to use for Nagios probes and modify the
+  first lines of the scripts as necessary if your Perl binary isn't in
+  /usr/bin/perl.  If your AFS client binaries aren't in the expected
+  places, you may also need to modify the top of each script to provide a
+  different set of paths to search.
+
+  You can then use the scripts directly with commands such as:
+
+      check_afs_space -H afs1
+
+  To use the scripts in a Nagios probe, configure a command such as:
+
+      define command {
+          command_name check_afs_space
+          command_line /path/to/install/check_afs_space -H $HOSTADDRESS$
+      }
+
+  changing the path to the script to wherever you installed the scripts.
+  You can of course pass additional options here, including making use of
+  arguments to the command in the service check definition using $ARG1$
+  and so forth.
+
+  The scripts all have default timeouts and check_afs_space and
+  check_afs_rxdebug have default thresholds that you may want to change.
+  You may also want to look at the regexes for acceptable bos status lines
+  in check_afs_bos; for example, if you want to get a warning whenever
+  your file server has a core file, you will want to modify the regex to
+  not filter that out.
+
+SUPPORT
+
+  The afs-monitor web page at:
+
+      http://www.eyrie.org/~eagle/software/afs-monitor/
+
+  will always have the current version of this package, the current
+  documentation, and pointers to any additional resources.
+
+  I welcome bug reports and patches for this package at rra@stanford.edu.
+  However, please be aware that I tend to be extremely busy and work
+  projects often take priority.  I'll save your mail and get to it as soon
+  as I can, but it may take me a couple of months.
+
+SOURCE REPOSITORY
+
+  afs-monitor is maintained using Git.  You can access the current source
+  by cloning the repository at:
+
+      git://git.eyrie.org/afs/afs-monitor.git
+
+  or view the repository via the web at:
+
+      http://git.eyrie.org/?p=afs/afs-monitor.git
+
+  When contributing modifications, patches (possibly generated by
+  git-format-patch) are preferred to Git pull requests.
+
+LICENSE
+
+  The afs-monitor distribution as a whole is covered by the following
+  copyright statement and license:
+
+    Copyright 2003, 2004, 2005, 2006, 2010, 2011, 2013
+        The Board of Trustees of the Leland Stanford Junior University
+
+    This program is free software; you may redistribute it and/or modify
+    it under the same terms as Perl itself.  This means that you may
+    choose between the two licenses that Perl is released under: the GNU
+    GPL and the Artistic License.  Please see your Perl distribution for
+    the details and copies of the licenses.
+
+  All individual files are released under this license or a license that
+  is compatible with it.  Files that are released under a compatible
+  license will have that license noted at the start of the file.  Some
+  files may have additional copyright holders as noted in those files.
